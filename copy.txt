@@ -1,0 +1,1205 @@
+app.py: 
+
+import pandas as pd
+import streamlit as st
+
+from chart_builder import create_multi_track_chart
+from config import TRACK_COLOR_PALETTE, PARAMETER_ALIASES
+from data_loader import (
+    get_available_numeric_columns,
+    load_catalog,
+    load_sections_for_columns,
+)
+from helpers import compute_section_ranges
+from sidebar import (
+    render_agent_controls,
+    render_time_filter,
+    render_track_parameter_selector,
+    render_well_section_selector,
+)
+
+st.set_page_config(layout="wide", initial_sidebar_state="expanded")
+
+st.markdown(
+    """
+    <style>
+    .block-container {
+        padding-top: 4.0rem;
+        padding-bottom: 0;
+    }
+
+    .well-header {
+        text-align: center;
+        color: #1E3A5F;
+        font-size: 1.4rem;
+        font-weight: 700;
+        margin-bottom: 0.25rem;
+    }
+
+    .well-subheader {
+        text-align: center;
+        color: #555;
+        font-size: 0.85rem;
+        margin-bottom: 0rem;
+    }
+
+    div[data-testid="stPlotlyChart"] {
+        position: relative;
+        padding-top: 18px;
+    }
+
+    div[data-testid="stPlotlyChart"] .modebar-container {
+        position: absolute !important;
+        top: -8px !important;
+        left: 0 !important;
+        width: 100% !important;
+        display: flex !important;
+        justify-content: center !important;
+        pointer-events: none !important;
+        z-index: 1000 !important;
+    }
+
+    div[data-testid="stPlotlyChart"] .modebar {
+        position: relative !important;
+        left: auto !important;
+        right: auto !important;
+        top: 0 !important;
+        opacity: 1 !important;
+        visibility: visible !important;
+        display: flex !important;
+        background: #f3f3f3 !important;
+        border: 1px solid #d0d0d0 !important;
+        border-radius: 0 !important;
+        box-shadow: none !important;
+        padding: 3px 6px !important;
+        pointer-events: auto !important;
+    }
+
+    div[data-testid="stPlotlyChart"] .modebar-group {
+        background: transparent !important;
+        border: none !important;
+        padding-left: 2px !important;
+        padding-right: 2px !important;
+    }
+
+    div[data-testid="stPlotlyChart"] a.modebar-btn {
+        opacity: 1 !important;
+    }
+
+    div[data-testid="stPlotlyChart"] svg.icon {
+        width: 18px !important;
+        height: 18px !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+def build_sections_by_well(catalog: dict) -> dict[str, list[str]]:
+    sections_by_well = {}
+    for entry in catalog["sections"]:
+        well = entry["well"]
+        section = str(entry["section_in"])
+        sections_by_well.setdefault(well, []).append(section)
+    return sections_by_well
+
+
+def flatten_selected_params(track_params: list[list[str]]) -> list[str]:
+    seen = []
+    for group in track_params:
+        for item in group:
+            if item not in seen:
+                seen.append(item)
+    return seen
+
+
+def build_label_to_column_map(discovered_params: list[str]) -> dict[str, str]:
+    discovered_set = set(discovered_params)
+    label_to_column = {}
+
+    for label, aliases in PARAMETER_ALIASES.items():
+        for alias in aliases:
+            if alias in discovered_set:
+                label_to_column[label] = alias
+                break
+
+    return label_to_column
+
+
+def make_context_key(selected_well: str, selected_sections: tuple[str, ...]) -> str:
+    return f"{selected_well}__{'_'.join(selected_sections)}"
+
+
+def main():
+    catalog = load_catalog()
+    if not catalog["sections"]:
+        st.error("data/catalog.json not found or empty.")
+        st.stop()
+
+    sections_by_well = build_sections_by_well(catalog)
+    selected_well, selected_sections = render_well_section_selector(sections_by_well)
+
+    if not selected_sections:
+        st.warning("Please select at least one section from the sidebar.")
+        st.stop()
+
+    selected_sections = tuple(sorted(selected_sections, key=float))
+    context_key = make_context_key(selected_well, selected_sections)
+
+    discovered_params = get_available_numeric_columns(selected_well, selected_sections)
+    label_to_column = build_label_to_column_map(discovered_params)
+    available_param_labels = list(label_to_column.keys())
+
+    if not available_param_labels:
+        st.error(
+            "None of the requested drilling parameters were found for the selected well/sections. "
+            f"Found numeric columns: {', '.join(discovered_params[:30])}"
+        )
+        st.stop()
+
+    track_param_labels = render_track_parameter_selector(available_param_labels, context_key)
+    selected_labels = flatten_selected_params(track_param_labels)
+
+    if not selected_labels:
+        st.info("Select parameters from the sidebar to display plots.")
+        st.stop()
+
+    requested_columns = [label_to_column[label] for label in selected_labels]
+
+    df = load_sections_for_columns(
+        well=selected_well,
+        sections=selected_sections,
+        requested_columns=tuple(requested_columns),
+    )
+
+    if df.empty:
+        st.error("No data loaded. Check the parquet files in the data folder.")
+        st.stop()
+
+    time_range, zoom_percent = render_time_filter(df, context_key)
+
+    df = df.loc[pd.Timestamp(time_range[0]): pd.Timestamp(time_range[1])]
+    if df.empty:
+        st.warning("No data available in the selected time range.")
+        st.stop()
+
+    agent_cfg = render_agent_controls(df, context_key)
+
+    section_ranges = compute_section_ranges(df, list(selected_sections))
+
+    sections_label = "  ·  ".join(f'{s}"' for s in selected_sections)
+    st.markdown(
+        f'<div class="well-header">Well {selected_well}</div>'
+        f'<div class="well-subheader">Mud Logging Dashboard &nbsp;|&nbsp; '
+        f'Sections: {sections_label}</div>',
+        unsafe_allow_html=True,
+    )
+
+    summary = agent_cfg.get("summary", {})
+    st.caption(
+        f"Review summary — Tags: {summary.get('tag_count', 0)} | "
+        f"Hits: {summary.get('agent_count', 0)} | "
+        f"Overlap: {summary.get('overlap_count', 0)} / {summary.get('tag_count', 0)}"
+    )
+
+    track_colors = [TRACK_COLOR_PALETTE[:len(params)] for params in track_param_labels]
+
+    track_params_real = [
+        [label_to_column[label] for label in track if label in label_to_column]
+        for track in track_param_labels
+    ]
+
+    track_params_real = track_params_real + [[]]
+    track_param_labels = track_param_labels + [[]]
+    track_colors = track_colors + [[]]
+
+    fig = create_multi_track_chart(
+        df=df,
+        track_params=track_params_real,
+        track_param_labels=track_param_labels,
+        track_colors=track_colors,
+        zoom_percent=zoom_percent,
+        section_ranges=section_ranges,
+        agent_cfg=agent_cfg,
+        chart_height=agent_cfg.get("chart_height", 860),
+    )
+
+    chart_key = f"multi_track_chart_{context_key}"
+
+    st.plotly_chart(
+        fig,
+        use_container_width=True,
+        key=chart_key,
+        config={
+            "displaylogo": False,
+            "displayModeBar": True,
+            "scrollZoom": False,
+            "modeBarButtonsToRemove": [
+                "lasso2d",
+                "select2d",
+                "toggleSpikelines",
+                "autoScale2d",
+            ],
+        },
+    )
+
+
+if __name__ == "__main__":
+    main()
+
+chart_builder.py:
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+
+from config import AGENT_TRACK_XRANGE, LOGICAL_PARAMETER_RANGES, N_TRACKS
+from helpers import downsample_xy, format_number, get_display_mode, get_target_points
+
+
+TAG_X = 0.22
+OVERLAP_X = 0.50
+AGENT_X = 0.78
+
+
+def add_section_boundaries(fig: go.Figure, section_ranges: list[dict], t_min_view, t_max_view):
+    if not section_ranges or t_min_view is None or t_max_view is None:
+        return
+
+    total_ns = float((t_max_view - t_min_view).value)
+    if total_ns <= 0:
+        return
+
+    def to_paper_y(t):
+        frac = float((t - t_min_view).value) / total_ns
+        return 1.0 - max(0.0, min(1.0, frac))
+
+    for i, sr in enumerate(section_ranges):
+        if i > 0:
+            y_line = to_paper_y(sr["t_min"])
+            if 0.01 < y_line < 0.99:
+                fig.add_shape(
+                    type="line",
+                    x0=0, x1=1, xref="paper",
+                    y0=y_line, y1=y_line, yref="paper",
+                    line=dict(dash="dash", color="rgba(70,70,70,0.30)", width=1),
+                )
+
+        mid = sr["t_min"] + (sr["t_max"] - sr["t_min"]) / 2
+        y_mid = max(0.02, min(0.98, to_paper_y(mid)))
+
+        fig.add_annotation(
+            xref="paper",
+            yref="paper",
+            x=0.006,
+            y=y_mid,
+            text=sr["label"],
+            textangle=-90,
+            showarrow=False,
+            font=dict(size=9, color="#333"),
+            bgcolor="rgba(255,255,255,0.65)",
+            borderpad=2,
+            xanchor="center",
+            yanchor="middle",
+        )
+
+
+def _normalize_with_range(series: pd.Series, label: str):
+    s = pd.to_numeric(series, errors="coerce")
+    s_valid = s.dropna()
+    if s_valid.empty:
+        return s * np.nan, np.nan, np.nan
+
+    range_min, range_max = LOGICAL_PARAMETER_RANGES.get(
+        label,
+        (float(s_valid.min()), float(s_valid.max()))
+    )
+
+    if np.isclose(range_min, range_max):
+        return pd.Series(np.full(len(s), 0.5), index=s.index), range_min, range_max
+
+    s_clipped = s.clip(lower=range_min, upper=range_max)
+    s_norm = (s_clipped - range_min) / (range_max - range_min)
+    return s_norm, range_min, range_max
+
+
+def _scale_annotation_y(param_idx: int) -> float:
+    return -0.09 - (param_idx * 0.05)
+
+
+def _agent_line_width(severity: str) -> int:
+    return {"Low": 2, "Medium": 4, "High": 7}.get(severity, 4)
+
+
+def _interval_overlap(a_start, a_end, b_start, b_end):
+    start = max(pd.Timestamp(a_start), pd.Timestamp(b_start))
+    end = min(pd.Timestamp(a_end), pd.Timestamp(b_end))
+    if start < end:
+        return start, end
+    return None
+
+
+def _compute_overlap_intervals(tag_intervals: list[dict], agent_intervals: list[dict]) -> list[dict]:
+    overlaps = []
+    for tag in tag_intervals:
+        for agent in agent_intervals:
+            ov = _interval_overlap(tag["start"], tag["end"], agent["start"], agent["end"])
+            if ov is not None:
+                overlaps.append(
+                    {
+                        "start": ov[0],
+                        "end": ov[1],
+                        "tag_label": tag.get("label", ""),
+                        "agent_label": agent.get("label", ""),
+                    }
+                )
+    return overlaps
+
+
+def _add_vertical_interval_line(
+    fig: go.Figure,
+    x_pos: float,
+    start_time,
+    end_time,
+    color: str,
+    width: int,
+    row: int,
+    col: int,
+    hover_text: str | None = None,
+):
+    y_vals = pd.date_range(pd.Timestamp(start_time), pd.Timestamp(end_time), periods=20)
+    x_vals = np.full(len(y_vals), x_pos)
+
+    fig.add_trace(
+        go.Scatter(
+            x=x_vals,
+            y=y_vals,
+            mode="lines",
+            line=dict(color=color, width=width),
+            showlegend=False,
+            hovertemplate=(hover_text or "") + "<extra></extra>",
+        ),
+        row=row,
+        col=col,
+    )
+
+
+def add_reference_line(fig: go.Figure, reference_time):
+    fig.add_shape(
+        type="line",
+        x0=0,
+        x1=1,
+        xref="paper",
+        y0=reference_time,
+        y1=reference_time,
+        yref="y",
+        line=dict(color="rgba(255,0,0,0.55)", width=2),
+    )
+
+
+def add_agent_track(fig: go.Figure, agent_cfg: dict, row: int, col: int):
+    tag_intervals = agent_cfg.get("tag_intervals", [])
+    agent_intervals = agent_cfg.get("agent_intervals", [])
+    overlap_intervals = _compute_overlap_intervals(tag_intervals, agent_intervals)
+
+    # subtle lane guides
+    for x_pos in [TAG_X, OVERLAP_X, AGENT_X]:
+        fig.add_shape(
+            type="line",
+            xref="x4",
+            yref="paper",
+            x0=x_pos,
+            x1=x_pos,
+            y0=0,
+            y1=1,
+            line=dict(color="rgba(100,100,100,0.18)", width=1, dash="dot"),
+        )
+
+    # tagger intervals: thin purple lane
+    for i, tag in enumerate(tag_intervals, start=1):
+        label = tag.get("label", f"Tag {i}")
+        hover_text = f"Tagger<br>{label}"
+        _add_vertical_interval_line(
+            fig=fig,
+            x_pos=TAG_X,
+            start_time=tag["start"],
+            end_time=tag["end"],
+            color="rgba(128, 0, 128, 0.85)",
+            width=5,
+            row=row,
+            col=col,
+            hover_text=hover_text,
+        )
+
+        mid_time = pd.Timestamp(tag["start"]) + (pd.Timestamp(tag["end"]) - pd.Timestamp(tag["start"])) / 2
+        fig.add_annotation(
+            xref="x4",
+            yref="y",
+            x=TAG_X - 0.05,
+            y=mid_time,
+            text=label,
+            showarrow=False,
+            font=dict(size=9, color="#6A0DAD"),
+            xanchor="right",
+            bgcolor="rgba(255,255,255,0.60)",
+        )
+
+    # overlap intervals: subtle green lane
+    for overlap in overlap_intervals:
+        hover_text = (
+            "Overlap<br>"
+            f"Tag: {overlap.get('tag_label', '')}<br>"
+            f"Agent: {overlap.get('agent_label', '')}"
+        )
+        _add_vertical_interval_line(
+            fig=fig,
+            x_pos=OVERLAP_X,
+            start_time=overlap["start"],
+            end_time=overlap["end"],
+            color="rgba(60, 160, 90, 0.90)",
+            width=6,
+            row=row,
+            col=col,
+            hover_text=hover_text,
+        )
+
+    # agent-hit intervals: thin red lane with thickness by severity
+    for i, agent in enumerate(agent_intervals, start=1):
+        label = agent.get("label", f"Hit {i}")
+        severity = agent.get("severity", "Medium")
+        hover_text = f"Agent hit<br>{label}<br>Severity: {severity}"
+        _add_vertical_interval_line(
+            fig=fig,
+            x_pos=AGENT_X,
+            start_time=agent["start"],
+            end_time=agent["end"],
+            color="rgba(220, 50, 47, 0.92)",
+            width=_agent_line_width(severity),
+            row=row,
+            col=col,
+            hover_text=hover_text,
+        )
+
+        mid_time = pd.Timestamp(agent["start"]) + (pd.Timestamp(agent["end"]) - pd.Timestamp(agent["start"])) / 2
+        fig.add_annotation(
+            xref="x4",
+            yref="y",
+            x=AGENT_X + 0.05,
+            y=mid_time,
+            text=label,
+            showarrow=False,
+            font=dict(size=9, color="#C0392B"),
+            xanchor="left",
+            bgcolor="rgba(255,255,255,0.60)",
+        )
+
+    # lane labels
+    fig.add_annotation(
+        xref="x4", yref="paper", x=TAG_X, y=1.03,
+        text="<b>Tagger</b>",
+        showarrow=False, font=dict(size=10, color="#6A0DAD")
+    )
+    fig.add_annotation(
+        xref="x4", yref="paper", x=OVERLAP_X, y=1.03,
+        text="<b>Overlap</b>",
+        showarrow=False, font=dict(size=10, color="#2E8B57")
+    )
+    fig.add_annotation(
+        xref="x4", yref="paper", x=AGENT_X, y=1.03,
+        text="<b>Agent</b>",
+        showarrow=False, font=dict(size=10, color="#C0392B")
+    )
+
+    summary = agent_cfg.get("summary", {})
+    summary_text = (
+        f"Tags: {summary.get('tag_count', 0)}"
+        f" &nbsp;|&nbsp; Hits: {summary.get('agent_count', 0)}"
+        f" &nbsp;|&nbsp; Overlap: {summary.get('overlap_count', 0)} / {summary.get('tag_count', 0)}"
+    )
+    fig.add_annotation(
+        xref="x4",
+        yref="paper",
+        x=0.5,
+        y=-0.09,
+        text=summary_text,
+        showarrow=False,
+        font=dict(size=10, color="#444"),
+    )
+
+    fig.update_xaxes(
+        row=row,
+        col=col,
+        range=list(AGENT_TRACK_XRANGE),
+        showgrid=False,
+        zeroline=False,
+        showticklabels=False,
+        side="top",
+        title_text="",
+    )
+
+
+def create_multi_track_chart(
+    df: pd.DataFrame,
+    track_params: list[list[str]],
+    track_param_labels: list[list[str]],
+    track_colors: list[list[str]],
+    zoom_percent: float,
+    section_ranges: list[dict] | None = None,
+    agent_cfg: dict | None = None,
+    chart_height: int = 860,
+) -> go.Figure:
+    subplot_titles = ["Track 1", "Track 2", "Track 3", "Track 4"]
+
+    fig = make_subplots(
+        rows=1,
+        cols=N_TRACKS,
+        shared_yaxes=True,
+        horizontal_spacing=0.02,
+        subplot_titles=subplot_titles,
+    )
+
+    mode, marker_size = get_display_mode(zoom_percent)
+    target_points = get_target_points(zoom_percent)
+
+    t_min_view = df.index.min() if not df.empty else None
+    t_max_view = df.index.max() if not df.empty else None
+
+    for track_idx in range(3):
+        params = track_params[track_idx]
+        labels = track_param_labels[track_idx]
+        colors = track_colors[track_idx]
+
+        for param_idx, (col, label, color) in enumerate(zip(params, labels, colors)):
+            if col not in df.columns:
+                continue
+
+            series = df[col]
+            valid = series.notna()
+            if not valid.any():
+                continue
+
+            raw_x = series.loc[valid]
+            raw_y = pd.Series(raw_x.index, index=raw_x.index)
+
+            x_norm_full, x_min, x_max = _normalize_with_range(raw_x, label)
+            x_plot, y_plot = downsample_xy(x_norm_full, raw_y, target_points)
+
+            if x_plot.dropna().empty:
+                continue
+
+            raw_vals = raw_x.loc[x_plot.index]
+
+            hovertemplate = (
+                f"<b>{label}</b><br>"
+                "Value: %{customdata[0]:.3f}<br>"
+                "Date: %{y|%Y-%m-%d}<br>"
+                "Time: %{y|%H:%M:%S}<extra></extra>"
+            )
+
+            fig.add_trace(
+                go.Scattergl(
+                    x=x_plot.values,
+                    y=y_plot.values,
+                    mode=mode,
+                    name=f"Track {track_idx + 1} - {label}",
+                    showlegend=False,
+                    line=dict(color=color, width=1.35),
+                    marker=dict(size=marker_size, color=color),
+                    customdata=np.column_stack([raw_vals.values]),
+                    hovertemplate=hovertemplate,
+                ),
+                row=1,
+                col=track_idx + 1,
+            )
+
+            xaxis_name = "x domain" if track_idx == 0 else f"x{track_idx + 1} domain"
+            fig.add_annotation(
+                xref=xaxis_name,
+                yref="paper",
+                x=0.5,
+                y=_scale_annotation_y(param_idx),
+                text=(
+                    f"<span style='color:{color}'><b>{label}</b></span> "
+                    f"<span style='color:{color}'>{format_number(x_min)}</span>"
+                    f" &nbsp;&nbsp; "
+                    f"<span style='color:{color}'>{format_number(x_max)}</span>"
+                ),
+                showarrow=False,
+                align="center",
+                font=dict(size=10),
+            )
+
+        fig.update_xaxes(
+            row=1,
+            col=track_idx + 1,
+            range=[0, 1],
+            showgrid=True,
+            gridcolor="rgba(140,140,140,0.20)",
+            gridwidth=0.6,
+            zeroline=False,
+            showticklabels=False,
+            side="top",
+            tickmode="array",
+            tickvals=[i / 20 for i in range(21)],
+        )
+
+    if agent_cfg:
+        add_agent_track(fig, agent_cfg, row=1, col=4)
+
+    if section_ranges and t_min_view is not None and t_max_view is not None:
+        add_section_boundaries(fig, section_ranges, t_min_view, t_max_view)
+
+    if agent_cfg and agent_cfg.get("show_reference_line") and agent_cfg.get("reference_time") is not None:
+        add_reference_line(fig, agent_cfg["reference_time"])
+
+    y_range = None
+    if t_min_view is not None and t_max_view is not None:
+        y_range = [t_max_view, t_min_view]
+
+    fig.update_yaxes(
+        range=y_range,
+        autorange=False if y_range else "reversed",
+        showgrid=True,
+        gridcolor="rgba(140,140,140,0.20)",
+        gridwidth=0.6,
+        tickformat="%d-%b-%y\n%H:%M:%S",
+        nticks=24,
+    )
+
+    fig.update_layout(
+        height=chart_height,
+        margin=dict(l=80, r=20, t=75, b=165),
+        hovermode="closest",
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        uirevision="keep_zoom_state",
+    )
+
+    return fig
+
+config.py:
+
+from pathlib import Path
+
+BASE_DIR = Path(__file__).parent
+DATA_DIR = BASE_DIR / "data"
+
+# Dashboard settings
+N_TRACKS = 4
+MAX_PARAMS_PER_TRACK = 3
+
+# Performance tuning
+MAX_POINTS_PER_TRACE = 3000
+MAX_POINTS_PER_TRACE_ZOOM = 6000
+
+# Metadata columns required for the app
+REQUIRED_META_COLUMNS = ["TIME", "_section_in", "DEPT"]
+
+# Track colors
+TRACK_COLOR_PALETTE = [
+    "#8E44AD",  # purple
+    "#3498DB",  # blue
+    "#E74C3C",  # red
+]
+
+# Only these labels will appear in the user choice list.
+# Aliases cover both the old logs and the new logs.
+PARAMETER_ALIASES = {
+    "Bit Depth": [
+        "BDTI",          # new logs
+        "BITD",
+        "BIT_DEPTH"
+    ],
+    "Well Depth (DBTM)": [
+        "GS_DBTM",       # old logs
+        "DBTM"           # old + new logs
+    ],
+    "BPOS": [
+        "GS_BPOS",       # old logs
+        "BPOS"           # old + new logs
+    ],
+    "HKL": [
+        "GS_HKLD",       # old logs
+        "HKL",
+        "HKLD"
+    ],
+    "MFI": [
+        "GS_MFI",        # in case present in some old files
+        "MFI"            # new logs
+    ],
+    "SPP": [
+        "GS_SPPA",       # old logs
+        "SPP",           # new logs
+        "SPPA"           # old logs
+    ],
+    "RPMB": [
+        "RPMB",          # new logs
+        "GS_RPM",        # old logs
+        "RPM"            # old logs
+    ],
+    "TRQ": [
+        "GS_TQA",        # old logs
+        "TRQ",           # new logs
+        "TQA"            # old logs
+    ],
+    "Pit Level": [
+        "GS_PITLV",
+        "GS_PITLVL",
+        "GS_PIT",
+        "PITLV",
+        "PITLVL",
+        "PIT"
+    ],
+}
+
+PARAMETER_DISPLAY_NAMES = {
+    "Bit Depth": "Bit Depth — current bit depth",
+    "Well Depth (DBTM)": "DBTM — well depth / depth to bottom",
+    "BPOS": "BPOS — block position",
+    "HKL": "HKL — hook load",
+    "MFI": "MFI — mud flow in",
+    "SPP": "SPP — standpipe pressure",
+    "RPMB": "RPMB — rotary speed",
+    "TRQ": "TRQ — torque",
+    "Pit Level": "Pit Level — mud pit level",
+}
+
+# Logical plotting ranges used to mimic the figure style.
+# If a parameter is missing here, the dashboard falls back to data min/max.
+LOGICAL_PARAMETER_RANGES = {
+    "Bit Depth": (0.0, 6000.0),
+    "Well Depth (DBTM)": (0.0, 6000.0),
+    "BPOS": (0.0, 50.0),
+    "HKL": (0.0, 250.0),
+    "MFI": (0.0, 4000.0),
+    "SPP": (-200.0, 4000.0),
+    "RPMB": (-100.0, 250.0),
+    "TRQ": (-20.0, 40.0),
+    "Pit Level": (0.0, 100.0),
+}
+
+AGENT_TRACK_XRANGE = (0.0, 1.0)
+
+
+data_loader.py:
+
+import json
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import pyarrow.parquet as pq
+import streamlit as st
+
+from config import DATA_DIR
+
+
+TIME_CANDIDATES = ["TIME", "date_time", "datetime", "Time", "time"]
+OPTIONAL_META_COLUMNS = ["_section_in", "DEPT"]
+
+
+@st.cache_data(show_spinner="Loading catalog …")
+def load_catalog() -> dict:
+    path = DATA_DIR / "catalog.json"
+    if not path.exists():
+        return {"sections": []}
+
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _read_schema_columns(path: Path) -> list[str]:
+    try:
+        return pq.read_schema(path).names
+    except Exception:
+        return []
+
+
+def _detect_time_column(existing_columns: list[str]) -> str | None:
+    for candidate in TIME_CANDIDATES:
+        if candidate in existing_columns:
+            return candidate
+    return None
+
+
+@st.cache_data(show_spinner="Loading well data …")
+def load_sections_for_columns(
+    well: str,
+    sections: tuple[str, ...],
+    requested_columns: tuple[str, ...],
+) -> pd.DataFrame:
+    frames = []
+
+    for sec in sections:
+        key = f"{well}_{str(sec).replace('.', '_')}in"
+        path = DATA_DIR / f"{key}.parquet"
+
+        if not path.exists():
+            st.warning(f"Parquet not found: {path.name}")
+            continue
+
+        schema_cols = _read_schema_columns(path)
+        if not schema_cols:
+            st.warning(f"Could not inspect schema for {path.name}")
+            continue
+
+        time_col = _detect_time_column(schema_cols)
+        if not time_col:
+            st.warning(f"No supported time column found in {path.name}")
+            continue
+
+        needed = [time_col] + OPTIONAL_META_COLUMNS + list(requested_columns)
+        cols = [c for c in needed if c in schema_cols]
+
+        try:
+            part = pd.read_parquet(path, columns=cols, engine="pyarrow")
+        except Exception as e:
+            st.warning(f"Could not read {path.name}: {e}")
+            continue
+
+        if time_col != "TIME":
+            part = part.rename(columns={time_col: "TIME"})
+
+        if "_section_in" not in part.columns:
+            part["_section_in"] = float(sec)
+
+        frames.append(part)
+
+    if not frames:
+        return pd.DataFrame()
+
+    merged = pd.concat(frames, ignore_index=True, sort=False)
+    merged.replace(-999.25, np.nan, inplace=True)
+
+    merged["TIME"] = pd.to_datetime(merged["TIME"], errors="coerce")
+    merged = merged.dropna(subset=["TIME"])
+    merged.sort_values("TIME", inplace=True)
+    merged.set_index("TIME", inplace=True)
+
+    for col in merged.columns:
+        if col in {"_section_in", "DEPT"}:
+            merged[col] = pd.to_numeric(merged[col], errors="coerce").astype("float32")
+            continue
+
+        if merged[col].dtype == object:
+            merged[col] = pd.to_numeric(merged[col], errors="coerce")
+        elif pd.api.types.is_integer_dtype(merged[col]) or pd.api.types.is_float_dtype(merged[col]):
+            merged[col] = merged[col].astype("float32")
+
+    return merged
+
+
+@st.cache_data(show_spinner=False)
+def get_available_numeric_columns(
+    well: str,
+    sections: tuple[str, ...],
+) -> list[str]:
+    if not sections:
+        return []
+
+    excluded = {"TIME", "Time", "date_time", "datetime", "time", "_section_in"}
+    discovered = set()
+
+    for sec in sections:
+        key = f"{well}_{str(sec).replace('.', '_')}in"
+        path = DATA_DIR / f"{key}.parquet"
+
+        if not path.exists():
+            continue
+
+        try:
+            df = pd.read_parquet(path, engine="pyarrow")
+        except Exception:
+            continue
+
+        for col in df.columns:
+            if col in excluded or col in discovered:
+                continue
+
+            series = df[col]
+
+            if pd.api.types.is_numeric_dtype(series):
+                discovered.add(col)
+                continue
+
+            sample = pd.to_numeric(series.dropna().head(200), errors="coerce")
+            if not sample.empty and sample.notna().any():
+                discovered.add(col)
+
+    return sorted(discovered)
+
+    sidebar.py:
+
+import csv
+import io
+import json
+
+import pandas as pd
+import streamlit as st
+
+from config import MAX_PARAMS_PER_TRACK, PARAMETER_DISPLAY_NAMES
+
+
+def _interval_overlap(a_start, a_end, b_start, b_end):
+    start = max(pd.Timestamp(a_start), pd.Timestamp(b_start))
+    end = min(pd.Timestamp(a_end), pd.Timestamp(b_end))
+    if start < end:
+        return start, end
+    return None
+
+
+def _build_summary(tag_intervals: list[dict], agent_intervals: list[dict]) -> dict:
+    overlap_count = 0
+    for tag in tag_intervals:
+        tag_has_overlap = False
+        for agent in agent_intervals:
+            if _interval_overlap(tag["start"], tag["end"], agent["start"], agent["end"]) is not None:
+                tag_has_overlap = True
+                break
+        if tag_has_overlap:
+            overlap_count += 1
+
+    return {
+        "tag_count": len(tag_intervals),
+        "agent_count": len(agent_intervals),
+        "overlap_count": overlap_count,
+    }
+
+
+def _build_export_payload(tag_intervals: list[dict], agent_intervals: list[dict], summary: dict) -> tuple[str, str]:
+    payload = {
+        "tag_intervals": [
+            {
+                "label": x["label"],
+                "start": str(x["start"]),
+                "end": str(x["end"]),
+            }
+            for x in tag_intervals
+        ],
+        "agent_intervals": [
+            {
+                "label": x["label"],
+                "start": str(x["start"]),
+                "end": str(x["end"]),
+                "severity": x["severity"],
+            }
+            for x in agent_intervals
+        ],
+        "summary": summary,
+    }
+    json_text = json.dumps(payload, indent=2)
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["type", "label", "start", "end", "severity"])
+    for item in tag_intervals:
+        writer.writerow(["tag", item["label"], item["start"], item["end"], ""])
+    for item in agent_intervals:
+        writer.writerow(["agent", item["label"], item["start"], item["end"], item["severity"]])
+
+    return json_text, output.getvalue()
+
+
+def render_well_section_selector(sections_by_well: dict):
+    with st.sidebar:
+        st.subheader("Well")
+        selected_well = st.selectbox(
+            "Select Well",
+            options=sorted(sections_by_well.keys()),
+            index=0,
+            key="selected_well",
+        )
+
+        available_sections = sorted(sections_by_well.get(selected_well, []), key=float)
+
+        st.subheader("Section")
+        selected_sections = st.multiselect(
+            "Select Section(s)",
+            options=available_sections,
+            default=[],
+            format_func=lambda s: f'{s}"',
+            key=f"selected_sections_{selected_well}",
+        )
+
+    return selected_well, selected_sections
+
+
+def render_track_parameter_selector(available_param_labels: list[str], context_key: str):
+    with st.sidebar:
+        st.subheader("Track Parameters (Tracks 1–3)")
+
+        track_params = []
+        for i in range(3):
+            selected = st.multiselect(
+                f"Track {i + 1} parameters (max {MAX_PARAMS_PER_TRACK})",
+                options=available_param_labels,
+                default=[],
+                max_selections=MAX_PARAMS_PER_TRACK,
+                key=f"track_params_{i + 1}_{context_key}",
+                format_func=lambda p: PARAMETER_DISPLAY_NAMES.get(p, p),
+            )
+            track_params.append(selected)
+
+    return track_params
+
+
+def render_time_filter(df, context_key: str):
+    with st.sidebar:
+        st.subheader("Time Filter")
+
+        t_min_all = df.index.min().to_pydatetime()
+        t_max_all = df.index.max().to_pydatetime()
+
+        time_range = st.slider(
+            "Select Time Range",
+            min_value=t_min_all,
+            max_value=t_max_all,
+            value=(t_min_all, t_max_all),
+            format="YYYY-MM-DD HH:mm",
+            key=f"time_range_{context_key}",
+        )
+
+        total_sec = (t_max_all - t_min_all).total_seconds()
+        sel_sec = (time_range[1] - time_range[0]).total_seconds()
+        zoom_percent = 100.0 - (sel_sec / total_sec * 100.0) if total_sec > 0 else 0.0
+
+        st.metric("Records", f"{len(df):,}")
+        st.metric("Zoom", f"{zoom_percent:.0f}%")
+
+    return time_range, zoom_percent
+
+
+def render_agent_controls(df, context_key: str):
+    with st.sidebar:
+        st.subheader("Track 4 — Review Track")
+
+        t_min = df.index.min().to_pydatetime()
+        t_max = df.index.max().to_pydatetime()
+
+        height_mode = st.selectbox(
+            "Chart height",
+            options=["Normal", "Stretched"],
+            index=0,
+            key=f"height_mode_{context_key}",
+        )
+        chart_height = 860 if height_mode == "Normal" else 1200
+
+        show_reference_line = st.checkbox(
+            "Show cross-track reference line",
+            value=False,
+            key=f"show_reference_line_{context_key}",
+        )
+
+        reference_time = None
+        if show_reference_line:
+            reference_time = st.slider(
+                "Reference time",
+                min_value=t_min,
+                max_value=t_max,
+                value=t_min,
+                format="YYYY-MM-DD HH:mm",
+                key=f"reference_time_{context_key}",
+            )
+
+        tag_intervals = []
+        agent_intervals = []
+
+        st.markdown("**Tagger lane**")
+        for i in range(1, 4):
+            enabled = st.checkbox(
+                f"Enable Tag {i}",
+                value=(i == 1),
+                key=f"enable_tag_{i}_{context_key}",
+            )
+            if enabled:
+                label = st.text_input(
+                    f"Tag {i} label",
+                    value=f"Observation {i}",
+                    key=f"tag_label_{i}_{context_key}",
+                )
+                interval = st.slider(
+                    f"Tag {i} interval",
+                    min_value=t_min,
+                    max_value=t_max,
+                    value=(t_min, t_max),
+                    format="YYYY-MM-DD HH:mm",
+                    key=f"tag_interval_{i}_{context_key}",
+                )
+                tag_intervals.append(
+                    {
+                        "label": label.strip() or f"Observation {i}",
+                        "start": interval[0],
+                        "end": interval[1],
+                    }
+                )
+
+        st.markdown("**Agent lane**")
+        for i in range(1, 4):
+            enabled = st.checkbox(
+                f"Enable Agent Hit {i}",
+                value=(i == 1),
+                key=f"enable_agent_{i}_{context_key}",
+            )
+            if enabled:
+                label = st.text_input(
+                    f"Agent Hit {i} label",
+                    value=f"Hit {i}",
+                    key=f"agent_label_{i}_{context_key}",
+                )
+                interval = st.slider(
+                    f"Agent Hit {i} interval",
+                    min_value=t_min,
+                    max_value=t_max,
+                    value=(t_min, t_max),
+                    format="YYYY-MM-DD HH:mm",
+                    key=f"agent_interval_{i}_{context_key}",
+                )
+                severity = st.selectbox(
+                    f"Agent Hit {i} severity",
+                    options=["Low", "Medium", "High"],
+                    index=1,
+                    key=f"agent_severity_{i}_{context_key}",
+                )
+                agent_intervals.append(
+                    {
+                        "label": label.strip() or f"Hit {i}",
+                        "start": interval[0],
+                        "end": interval[1],
+                        "severity": severity,
+                    }
+                )
+
+        summary = _build_summary(tag_intervals, agent_intervals)
+        st.caption(
+            f"Summary — Tags: {summary['tag_count']} | "
+            f"Hits: {summary['agent_count']} | "
+            f"Overlap: {summary['overlap_count']} / {summary['tag_count']}"
+        )
+
+        json_text, csv_text = _build_export_payload(tag_intervals, agent_intervals, summary)
+
+        st.download_button(
+            "Export tags/hits as JSON",
+            data=json_text,
+            file_name=f"tag_review_{context_key}.json",
+            mime="application/json",
+            key=f"download_json_{context_key}",
+        )
+
+        st.download_button(
+            "Export tags/hits as CSV",
+            data=csv_text,
+            file_name=f"tag_review_{context_key}.csv",
+            mime="text/csv",
+            key=f"download_csv_{context_key}",
+        )
+
+        return {
+            "tag_intervals": tag_intervals,
+            "agent_intervals": agent_intervals,
+            "summary": summary,
+            "show_reference_line": show_reference_line,
+            "reference_time": reference_time,
+            "chart_height": chart_height,
+        }
