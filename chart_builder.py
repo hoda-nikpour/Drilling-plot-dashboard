@@ -548,18 +548,15 @@ def create_multi_track_chart(
     if t_min_view is not None and t_max_view is not None:
         y_range = [t_max_view, t_min_view]
 
-    tickvals, ticktext = _build_dual_time_ticks(t_min_view, t_max_view, n_ticks=12)
-
     fig.update_yaxes(
         range=y_range,
         autorange=False if y_range else "reversed",
         showgrid=True,
         gridcolor="rgba(140,140,140,0.20)",
         gridwidth=0.6,
-        tickmode="array" if tickvals is not None else "auto",
-        tickvals=tickvals,
-        ticktext=ticktext,
         tickfont=dict(size=10, family="Courier New"),
+        tickformat="%d-%b-%y\n%H:%M:%S",
+        nticks=12,
     )
 
     fig.add_annotation(
