@@ -1,22 +1,33 @@
 import numpy as np
 import pandas as pd
 
-from config import MAX_POINTS_PER_TRACE, MAX_POINTS_PER_TRACE_ZOOM
+from config import (
+    BASE_MARKER_SIZE,
+    MAX_POINTS_PER_TRACE,
+    MAX_POINTS_PER_TRACE_ZOOM,
+    ZOOM_MARKER_SIZE,
+)
 
 
-def get_display_mode(zoom_percent: float) -> tuple[str, int]:
+def get_display_mode(zoom_percent: float) -> tuple[str, float]:
     """
-    Normal view: lines
-    Zoomed view: lines + markers
+    Keep markers visible at all times.
+
+    Important note:
+    Plotly zooming inside the chart does not automatically update Streamlit state,
+    so the marker size must remain usable even without a sidebar time-range change.
     """
     if zoom_percent < 20:
-        return "lines", 0
+        return "lines+markers", BASE_MARKER_SIZE
     if zoom_percent < 60:
-        return "lines+markers", 3
-    return "lines+markers", 4
+        return "lines+markers", max(BASE_MARKER_SIZE, 4.0)
+    return "lines+markers", ZOOM_MARKER_SIZE
 
 
 def get_target_points(zoom_percent: float) -> int:
+    """
+    Keep enough points so direct chart zoom remains informative.
+    """
     if zoom_percent < 20:
         return MAX_POINTS_PER_TRACE
     return MAX_POINTS_PER_TRACE_ZOOM
@@ -74,11 +85,7 @@ def normalize_series(s: pd.Series):
 def format_number(value: float) -> str:
     if pd.isna(value):
         return "NA"
-    if abs(value) >= 1000:
-        return f"{value:,.0f}"
-    if abs(value) >= 10:
-        return f"{value:.1f}"
-    return f"{value:.2f}"
+    return f"{value:.1f}"
 
 
 def axis_annotation_y(param_idx: int) -> float:

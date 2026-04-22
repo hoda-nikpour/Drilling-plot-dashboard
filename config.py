@@ -8,8 +8,15 @@ N_TRACKS = 4
 MAX_PARAMS_PER_TRACK = 3
 
 # Performance tuning
-MAX_POINTS_PER_TRACE = 3000
-MAX_POINTS_PER_TRACE_ZOOM = 6000
+MAX_POINTS_PER_TRACE = 12000
+MAX_POINTS_PER_TRACE_ZOOM = 20000
+
+# Marker settings
+# Important:
+# Plotly zoom inside the chart does not automatically re-run Streamlit code,
+# so marker size should not rely on chart zoom alone.
+BASE_MARKER_SIZE = 0.5
+ZOOM_MARKER_SIZE = 7.0
 
 # Metadata columns required for the app
 REQUIRED_META_COLUMNS = ["TIME", "_section_in", "DEPT"]
@@ -31,6 +38,7 @@ PARAMETER_ALIASES = {
     "SPP": ["GS_SPPA", "SPP", "SPPA"],
     "RPMB": ["RPMB", "GS_RPM", "RPM"],
     "TRQ": ["GS_TQA", "TRQ", "TQA"],
+    "ROP": ["ROP", "GS_ROP", "DRILL_RATE", "RATE_OF_PENETRATION"],
     "Pit Level": ["GS_PITLV", "GS_PITLVL", "GS_PIT", "PITLV", "PITLVL", "PIT"],
 }
 
@@ -43,6 +51,7 @@ PARAMETER_DISPLAY_NAMES = {
     "SPP": "SPP — standpipe pressure",
     "RPMB": "RPMB — rotary speed",
     "TRQ": "TRQ — torque",
+    "ROP": "ROP — rate of penetration",
     "Pit Level": "Pit Level — mud pit level",
 }
 
@@ -74,27 +83,33 @@ PARAMETER_CATALOG = {
     },
     "MFI": {
         "meaning": "Mud flow in",
-        "unit": "flow unit",
+        "unit": "l/min",
         "logical_min": 0.0,
         "logical_max": 4000.0,
     },
     "SPP": {
         "meaning": "Standpipe pressure",
         "unit": "kPa",
-        "logical_min": -200.0,
+        "logical_min": 0.0,
         "logical_max": 4000.0,
     },
     "RPMB": {
         "meaning": "Rotary speed",
         "unit": "rpm",
-        "logical_min": -100.0,
+        "logical_min": 0.0,
         "logical_max": 250.0,
     },
     "TRQ": {
         "meaning": "Torque",
         "unit": "kN.m",
-        "logical_min": -20.0,
+        "logical_min": 0.0,
         "logical_max": 40.0,
+    },
+    "ROP": {
+        "meaning": "Rate of penetration",
+        "unit": "m/h",
+        "logical_min": 0.0,
+        "logical_max": 200.0,
     },
     "Pit Level": {
         "meaning": "Mud pit level",

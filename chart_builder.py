@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from config import AGENT_TRACK_XRANGE, LOGICAL_PARAMETER_RANGES, N_TRACKS
+from config import AGENT_TRACK_XRANGE, LOGICAL_PARAMETER_RANGES, N_TRACKS, PARAMETER_CATALOG
 from helpers import downsample_xy, format_number, get_display_mode, get_target_points
 
 
@@ -30,8 +30,12 @@ def add_section_boundaries(fig: go.Figure, section_ranges: list[dict], t_min_vie
             if 0.01 < y_line < 0.99:
                 fig.add_shape(
                     type="line",
-                    x0=0, x1=1, xref="paper",
-                    y0=y_line, y1=y_line, yref="paper",
+                    x0=0,
+                    x1=1,
+                    xref="paper",
+                    y0=y_line,
+                    y1=y_line,
+                    yref="paper",
                     line=dict(dash="dash", color="rgba(70,70,70,0.30)", width=1),
                 )
 
@@ -54,15 +58,20 @@ def add_section_boundaries(fig: go.Figure, section_ranges: list[dict], t_min_vie
         )
 
 
-def _normalize_with_range(series: pd.Series, label: str):
+def _normalize_with_range(
+    series: pd.Series,
+    label: str,
+    parameter_ranges: dict[str, tuple[float, float]] | None = None,
+):
     s = pd.to_numeric(series, errors="coerce")
     s_valid = s.dropna()
     if s_valid.empty:
         return s * np.nan, np.nan, np.nan
 
-    range_min, range_max = LOGICAL_PARAMETER_RANGES.get(
+    range_lookup = parameter_ranges or LOGICAL_PARAMETER_RANGES
+    range_min, range_max = range_lookup.get(
         label,
-        (float(s_valid.min()), float(s_valid.max()))
+        (float(s_valid.min()), float(s_valid.max())),
     )
 
     if np.isclose(range_min, range_max):
@@ -222,26 +231,41 @@ def add_agent_track(fig: go.Figure, agent_cfg: dict, row: int, col: int):
         )
 
     fig.add_annotation(
-        xref="x4", yref="paper", x=TAG_X, y=1.03,
+        xref="x4",
+        yref="paper",
+        x=TAG_X,
+        y=1.03,
         text="<b>Tagger</b>",
-        showarrow=False, font=dict(size=10, color="#6A0DAD")
+        showarrow=False,
+        font=dict(size=10, color="#6A0DAD"),
     )
     fig.add_annotation(
-        xref="x4", yref="paper", x=OVERLAP_X, y=1.03,
+        xref="x4",
+        yref="paper",
+        x=OVERLAP_X,
+        y=1.03,
         text="<b>Overlap</b>",
-        showarrow=False, font=dict(size=10, color="#2E8B57")
+        showarrow=False,
+        font=dict(size=10, color="#2E8B57"),
     )
     fig.add_annotation(
-        xref="x4", yref="paper", x=AGENT_X, y=1.03,
+        xref="x4",
+        yref="paper",
+        x=AGENT_X,
+        y=1.03,
         text="<b>Agent</b>",
-        showarrow=False, font=dict(size=10, color="#C0392B")
+        showarrow=False,
+        font=dict(size=10, color="#C0392B"),
     )
 
     summary = agent_cfg.get("summary", {})
+    accepted_text = "Accepted" if summary.get("accepted", False) else "Not accepted yet"
     summary_text = (
         f"Tags: {summary.get('tag_count', 0)}"
         f" &nbsp;|&nbsp; Hits: {summary.get('agent_count', 0)}"
         f" &nbsp;|&nbsp; Overlap: {summary.get('overlap_count', 0)} / {summary.get('tag_count', 0)}"
+        f" &nbsp;|&nbsp; Score: {summary.get('score_percent', 0.0):.1f}%"
+        f" &nbsp;|&nbsp; {accepted_text}"
     )
     fig.add_annotation(
         xref="x4",
@@ -281,39 +305,131 @@ def _add_track_scale_guides(fig: go.Figure, track_idx: int):
         )
 
 
-def _add_scale_row(fig: go.Figure, track_idx: int, param_idx: int, label: str, color: str, x_min: float, x_max: float):
+def _add_scale_row(
+    fig: go.Figure,
+    track_idx: int,
+    param_idx: int,
+    label: str,
+    color: str,
+    x_min: float,
+    x_max: float,
+):
     axis_name = "x domain" if track_idx == 0 else f"x{track_idx + 1} domain"
-    y_pos = -0.09 - (param_idx * 0.052)
+
+    row_height = 0.06
+    y_center = -0.10 - (param_idx * row_height)
+    y0 = y_center - 0.022
+    y1 = y_center + 0.022
+
+    unit = PARAMETER_CATALOG.get(label, {}).get("unit", "")
+    title_text = f"{label}{' (' + unit + ')' if unit else ''}"
+
+    fig.add_shape(
+        type="rect",
+        xref=axis_name,
+        yref="paper",
+        x0=0.01,
+        x1=0.99,
+        y0=y0,
+        y1=y1,
+        line=dict(color="rgba(90,90,90,0.45)", width=1),
+        fillcolor="rgba(245,245,245,0.85)",
+        layer="below",
+    )
+
+    fig.add_shape(
+        type="line",
+        xref=axis_name,
+        yref="paper",
+        x0=0.17,
+        x1=0.17,
+        y0=y0,
+        y1=y1,
+        line=dict(color="rgba(120,120,120,0.35)", width=1),
+        layer="below",
+    )
+
+    fig.add_shape(
+        type="line",
+        xref=axis_name,
+        yref="paper",
+        x0=0.83,
+        x1=0.83,
+        y0=y0,
+        y1=y1,
+        line=dict(color="rgba(120,120,120,0.35)", width=1),
+        layer="below",
+    )
+
+    fig.add_shape(
+        type="line",
+        xref=axis_name,
+        yref="paper",
+        x0=0.50,
+        x1=0.50,
+        y0=y0,
+        y1=y1,
+        line=dict(color="rgba(160,160,160,0.18)", width=1, dash="dot"),
+        layer="below",
+    )
 
     fig.add_annotation(
         xref=axis_name,
         yref="paper",
-        x=0.01,
-        y=y_pos,
-        text=f"<span style='color:{color}'><b>{label}</b></span>",
+        x=0.09,
+        y=y_center,
+        text=f"<span style='color:{color}; font-size:11px'><b>{format_number(x_min)}</b></span>",
         showarrow=False,
-        xanchor="left",
-        font=dict(size=10),
+        xanchor="center",
+        yanchor="middle",
+        align="center",
     )
+
     fig.add_annotation(
         xref=axis_name,
         yref="paper",
-        x=0.16,
-        y=y_pos,
-        text=f"<span style='color:{color}'>{format_number(x_min)}</span>",
+        x=0.50,
+        y=y_center,
+        text=f"<span style='color:{color}; font-size:13px'><b>{title_text}</b></span>",
         showarrow=False,
-        xanchor="left",
-        font=dict(size=10),
+        xanchor="center",
+        yanchor="middle",
+        align="center",
     )
+
     fig.add_annotation(
         xref=axis_name,
         yref="paper",
-        x=0.84,
-        y=y_pos,
-        text=f"<span style='color:{color}'>{format_number(x_max)}</span>",
+        x=0.91,
+        y=y_center,
+        text=f"<span style='color:{color}; font-size:11px'><b>{format_number(x_max)}</b></span>",
         showarrow=False,
-        xanchor="right",
-        font=dict(size=10),
+        xanchor="center",
+        yanchor="middle",
+        align="center",
+    )
+
+
+def _add_track_selected_params_summary(fig: go.Figure, track_idx: int, labels: list[str], colors: list[str]):
+    axis_name = "x domain" if track_idx == 0 else f"x{track_idx + 1} domain"
+
+    if not labels:
+        summary_text = "<span style='color:#888; font-size:10px'>No parameters selected</span>"
+    else:
+        pieces = []
+        for label, color in zip(labels, colors):
+            pieces.append(f"<span style='color:{color}; font-size:10px'>{label}</span>")
+        summary_text = " &nbsp;&nbsp;•&nbsp;&nbsp; ".join(pieces)
+
+    fig.add_annotation(
+        xref=axis_name,
+        yref="paper",
+        x=0.5,
+        y=-0.31,
+        text=summary_text,
+        showarrow=False,
+        xanchor="center",
+        font=dict(size=10, color="#666"),
     )
 
 
@@ -326,6 +442,7 @@ def create_multi_track_chart(
     section_ranges: list[dict] | None = None,
     agent_cfg: dict | None = None,
     chart_height: int = 950,
+    parameter_ranges: dict[str, tuple[float, float]] | None = None,
 ) -> go.Figure:
     subplot_titles = ["Track 1", "Track 2", "Track 3", "Track 4"]
 
@@ -354,27 +471,29 @@ def create_multi_track_chart(
             if col not in df.columns:
                 continue
 
-            series = df[col]
+            series = pd.to_numeric(df[col], errors="coerce")
             valid = series.notna()
             if not valid.any():
                 continue
 
-            raw_x = series.loc[valid]
-            raw_y = pd.Series(raw_x.index, index=raw_x.index)
+            raw_x_full = series.loc[valid]
+            raw_y_full = pd.Series(raw_x_full.index, index=raw_x_full.index)
 
-            x_norm_full, x_min, x_max = _normalize_with_range(raw_x, label)
-            x_plot, y_plot = downsample_xy(x_norm_full, raw_y, target_points)
+            x_norm_full, x_min, x_max = _normalize_with_range(raw_x_full, label, parameter_ranges)
+            x_plot, y_plot = downsample_xy(x_norm_full, raw_y_full, target_points)
 
             if x_plot.dropna().empty:
                 continue
 
-            raw_vals = raw_x.loc[x_plot.index]
+            raw_vals = raw_x_full.loc[x_plot.index]
+            unit = PARAMETER_CATALOG.get(label, {}).get("unit", "")
 
             hovertemplate = (
                 f"<b>{label}</b><br>"
-                "Value: %{customdata[0]:.3f}<br>"
-                "Date: %{y|%Y-%m-%d}<br>"
-                "Time: %{y|%H:%M:%S}<extra></extra>"
+                + (f"Unit: {unit}<br>" if unit else "")
+                + "Value: %{customdata[0]:.1f}<br>"
+                + "Date: %{y|%Y-%m-%d}<br>"
+                + "Time: %{y|%H:%M:%S}<extra></extra>"
             )
 
             fig.add_trace(
@@ -384,8 +503,13 @@ def create_multi_track_chart(
                     mode=mode,
                     name=f"Track {track_idx + 1} - {label}",
                     showlegend=False,
-                    line=dict(color=color, width=1.35),
-                    marker=dict(size=marker_size, color=color),
+                    line=dict(color=color, width=1.25),
+                    marker=dict(
+                        size=marker_size,
+                        color=color,
+                        opacity=0.95,
+                        line=dict(width=0.5, color="rgba(40,40,40,0.55)"),
+                    ),
                     customdata=np.column_stack([raw_vals.values]),
                     hovertemplate=hovertemplate,
                 ),
@@ -394,6 +518,8 @@ def create_multi_track_chart(
             )
 
             _add_scale_row(fig, track_idx, param_idx, label, color, x_min, x_max)
+
+        _add_track_selected_params_summary(fig, track_idx, labels, colors)
 
         fig.update_xaxes(
             row=1,
@@ -449,7 +575,7 @@ def create_multi_track_chart(
 
     fig.update_layout(
         height=chart_height,
-        margin=dict(l=120, r=20, t=75, b=170),
+        margin=dict(l=120, r=20, t=75, b=320),
         hovermode="closest",
         plot_bgcolor="white",
         paper_bgcolor="white",

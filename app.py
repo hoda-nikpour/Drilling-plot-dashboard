@@ -1,4 +1,3 @@
-
 import pandas as pd
 import streamlit as st
 
@@ -12,6 +11,7 @@ from data_loader import (
 from helpers import compute_section_ranges
 from sidebar import (
     render_agent_controls,
+    render_parameter_range_controls,
     render_time_filter,
     render_track_parameter_selector,
     render_well_section_selector,
@@ -150,7 +150,7 @@ def build_parameter_catalog_df(label_to_column: dict[str, str]) -> pd.DataFrame:
 def build_manual_review_df(summary: dict) -> pd.DataFrame:
     rows = summary.get("tag_status_rows", [])
     if not rows:
-        return pd.DataFrame(columns=["Tag", "Start", "End", "Status"])
+        return pd.DataFrame(columns=["Tag", "Start", "End", "Status", "Overlap Start", "Overlap End"])
 
     return pd.DataFrame(
         [
@@ -159,6 +159,8 @@ def build_manual_review_df(summary: dict) -> pd.DataFrame:
                 "Start": row["start"],
                 "End": row["end"],
                 "Status": row["status"],
+                "Overlap Start": row["overlap_start"],
+                "Overlap End": row["overlap_end"],
             }
             for row in rows
         ]
@@ -202,6 +204,8 @@ def main():
         st.info("Select parameters from the sidebar to display plots.")
         st.stop()
 
+    parameter_ranges = render_parameter_range_controls(selected_labels, context_key)
+
     requested_columns = [label_to_column[label] for label in selected_labels]
 
     df = load_sections_for_columns(
@@ -234,10 +238,14 @@ def main():
     )
 
     summary = agent_cfg.get("summary", {})
+    accepted_text = "Accepted" if summary.get("accepted", False) else "Not accepted yet"
+
     st.caption(
         f"Review summary — Tags: {summary.get('tag_count', 0)} | "
         f"Hits: {summary.get('agent_count', 0)} | "
-        f"Overlap: {summary.get('overlap_count', 0)} / {summary.get('tag_count', 0)}"
+        f"Overlap: {summary.get('overlap_count', 0)} / {summary.get('tag_count', 0)} | "
+        f"Score: {summary.get('score_percent', 0.0):.1f}% | "
+        f"Status: {accepted_text}"
     )
 
     review_df = build_manual_review_df(summary)
@@ -265,9 +273,15 @@ def main():
         section_ranges=section_ranges,
         agent_cfg=agent_cfg,
         chart_height=agent_cfg.get("chart_height", 950),
+        parameter_ranges=parameter_ranges,
     )
 
     chart_key = f"multi_track_chart_{context_key}"
+
+    st.caption(
+        "Chart controls: use the toolbar above the chart or double-click inside the chart to reset zoom. "
+        "Use 'Reset time filter' in the sidebar to restore the full selected time window."
+    )
 
     st.plotly_chart(
         fig,
@@ -277,11 +291,11 @@ def main():
             "displaylogo": False,
             "displayModeBar": True,
             "scrollZoom": False,
+            "doubleClick": "reset+autosize",
             "modeBarButtonsToRemove": [
                 "lasso2d",
                 "select2d",
                 "toggleSpikelines",
-                "autoScale2d",
             ],
         },
     )
