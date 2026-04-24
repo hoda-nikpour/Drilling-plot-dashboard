@@ -12,6 +12,7 @@ from helpers import compute_section_ranges
 from sidebar import (
     render_agent_controls,
     render_parameter_range_controls,
+    render_plot_style_controls,
     render_time_filter,
     render_track_parameter_selector,
     render_well_section_selector,
@@ -205,6 +206,7 @@ def main():
         st.stop()
 
     parameter_ranges = render_parameter_range_controls(selected_labels, context_key)
+    marker_setting = render_plot_style_controls(context_key)
 
     requested_columns = [label_to_column[label] for label in selected_labels]
 
@@ -274,6 +276,7 @@ def main():
         agent_cfg=agent_cfg,
         chart_height=agent_cfg.get("chart_height", 950),
         parameter_ranges=parameter_ranges,
+        marker_setting=marker_setting,
     )
 
     chart_key = f"multi_track_chart_{context_key}"

@@ -203,6 +203,22 @@ def render_parameter_range_controls(selected_labels: list[str], context_key: str
 
     return overrides
 
+def render_plot_style_controls(context_key: str) -> str:
+    with st.sidebar:
+        st.subheader("Plot Style")
+        marker_setting = st.radio(
+            "Dots / markers",
+            options=["Auto dots", "Lines only"],
+            index=0,
+            key=f"marker_setting_{context_key}",
+            help=(
+                "Auto dots keeps small dots available all the time. "
+                "When zoomed out they merge visually into the line; when zoomed in they become visible."
+            ),
+        )
+        st.caption("Recommended: Auto dots. Dots become visible naturally when you zoom in.")
+
+    return marker_setting
 
 def render_time_filter(df, context_key: str):
     with st.sidebar:

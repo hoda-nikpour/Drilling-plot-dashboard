@@ -4,8 +4,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from config import AGENT_TRACK_XRANGE, LOGICAL_PARAMETER_RANGES, N_TRACKS, PARAMETER_CATALOG
-from helpers import downsample_xy, format_number, get_display_mode, get_target_points
-
+from helpers import downsample_xy, format_number, get_target_points
 
 TAG_X = 0.24
 OVERLAP_X = 0.50
@@ -443,6 +442,7 @@ def create_multi_track_chart(
     agent_cfg: dict | None = None,
     chart_height: int = 950,
     parameter_ranges: dict[str, tuple[float, float]] | None = None,
+    marker_setting: str = "Auto",
 ) -> go.Figure:
     subplot_titles = ["Track 1", "Track 2", "Track 3", "Track 4"]
 
@@ -454,11 +454,20 @@ def create_multi_track_chart(
         subplot_titles=subplot_titles,
     )
 
-    mode, marker_size = get_display_mode(zoom_percent)
-    target_points = get_target_points(zoom_percent)
-
     t_min_view = df.index.min() if not df.empty else None
     t_max_view = df.index.max() if not df.empty else None
+
+    # Always use lines + small markers.
+    # When zoomed out, the dots visually merge into the line.
+    # When zoomed in, the dots become visible automatically.
+    if marker_setting == "Lines only":
+        mode = "lines"
+        marker_size = 0.0
+    else:
+        mode = "lines+markers"
+        marker_size = 4.0
+
+    target_points = get_target_points(zoom_percent)
 
     for track_idx in range(3):
         params = track_params[track_idx]
@@ -503,12 +512,12 @@ def create_multi_track_chart(
                     mode=mode,
                     name=f"Track {track_idx + 1} - {label}",
                     showlegend=False,
-                    line=dict(color=color, width=1.25),
+                                        line=dict(color=color, width=0.75),
                     marker=dict(
                         size=marker_size,
                         color=color,
-                        opacity=0.95,
-                        line=dict(width=0.5, color="rgba(40,40,40,0.55)"),
+                        opacity=0.45,
+                        line=dict(width=0),
                     ),
                     customdata=np.column_stack([raw_vals.values]),
                     hovertemplate=hovertemplate,

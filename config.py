@@ -15,8 +15,8 @@ MAX_POINTS_PER_TRACE_ZOOM = 20000
 # Important:
 # Plotly zoom inside the chart does not automatically re-run Streamlit code,
 # so marker size should not rely on chart zoom alone.
-BASE_MARKER_SIZE = 0.5
-ZOOM_MARKER_SIZE = 7.0
+BASE_MARKER_SIZE = 1.2
+ZOOM_MARKER_SIZE = 4.5
 
 # Metadata columns required for the app
 REQUIRED_META_COLUMNS = ["TIME", "_section_in", "DEPT"]
@@ -30,23 +30,29 @@ TRACK_COLOR_PALETTE = [
 
 # Sidebar labels mapped to possible raw data-file column names
 PARAMETER_ALIASES = {
-    "Bit Depth": ["BDTI", "BITD", "BIT_DEPTH"],
-    "Well Depth (DBTM)": ["GS_DBTM", "DBTM"],
+    # Pål observed that DBTM/GS_DBTM behaves like bit depth in the current data.
+    "Bit Depth": ["GS_DBTM", "DBTM", "BDTI", "BITD", "BIT_DEPTH"],
+
+    # True well/measured depth is likely hidden in these channels.
+    "Well Depth": ["DEPT", "GS_DMEA", "DMEA", "DVER", "GS_DVER", "DBTV"],
+
     "BPOS": ["GS_BPOS", "BPOS"],
-    "HKL": ["GS_HKLD", "HKL", "HKLD"],
-    "MFI": ["GS_MFI", "MFI"],
-    "SPP": ["GS_SPPA", "SPP", "SPPA"],
-    "RPMB": ["RPMB", "GS_RPM", "RPM"],
-    "TRQ": ["GS_TQA", "TRQ", "TQA"],
-    "ROP": ["ROP", "GS_ROP", "DRILL_RATE", "RATE_OF_PENETRATION"],
-    "Pit Level": ["GS_PITLV", "GS_PITLVL", "GS_PIT", "PITLV", "PITLVL", "PIT"],
+    "HKL": ["GS_HKLD", "HKL", "HKLD", "HKLX", "HKLI"],
+    "WOB": ["WOB", "SWOB", "SWOB30s", "GS_SWOB"],
+    "MFI": ["GS_MFI", "MFI", "GS_TFLO", "TFLO", "TFLO30s"],
+    "SPP": ["GS_SPPA", "SPP", "SPPA", "SIG_SPP5s"],
+    "RPMB": ["RPMB", "GS_RPM", "RPM", "RPM30s", "DRPM", "DRPM30s", "NRPM_RT", "TRPM", "TRPM_RT"],
+    "TRQ": ["GS_TQA", "TRQ", "TQA", "SIG_TQ30s"],
+    "ROP": ["ROP", "ROP5", "ROP30s", "GS_ROP", "QROP", "DRILL_RATE", "RATE_OF_PENETRATION"],
+    "Pit Level": ["GS_PITLV", "GS_PITLVL", "GS_PIT", "PITLV", "PITLVL", "PIT", "TVA", "GS_TVA", "HVM", "HVMX"],
 }
 
 PARAMETER_DISPLAY_NAMES = {
-    "Bit Depth": "Bit Depth — current bit depth",
-    "Well Depth (DBTM)": "DBTM — well depth / depth to bottom",
+    "Bit Depth": "Bit Depth — bit/depth-to-bottom channel",
+    "Well Depth": "Well Depth — measured/reference well depth",
     "BPOS": "BPOS — block position",
     "HKL": "HKL — hook load",
+    "WOB": "WOB — weight on bit",
     "MFI": "MFI — mud flow in",
     "SPP": "SPP — standpipe pressure",
     "RPMB": "RPMB — rotary speed",
@@ -55,16 +61,15 @@ PARAMETER_DISPLAY_NAMES = {
     "Pit Level": "Pit Level — mud pit level",
 }
 
-# Parameter catalog for boss review
 PARAMETER_CATALOG = {
     "Bit Depth": {
-        "meaning": "Current bit depth",
+        "meaning": "Bit depth / depth-to-bottom channel",
         "unit": "m",
         "logical_min": 0.0,
         "logical_max": 6000.0,
     },
-    "Well Depth (DBTM)": {
-        "meaning": "Well depth / depth to bottom",
+    "Well Depth": {
+        "meaning": "Measured/reference well depth",
         "unit": "m",
         "logical_min": 0.0,
         "logical_max": 6000.0,
@@ -80,6 +85,12 @@ PARAMETER_CATALOG = {
         "unit": "t or kkgf",
         "logical_min": 0.0,
         "logical_max": 250.0,
+    },
+    "WOB": {
+        "meaning": "Weight on bit",
+        "unit": "t or kkgf",
+        "logical_min": 0.0,
+        "logical_max": 100.0,
     },
     "MFI": {
         "meaning": "Mud flow in",

@@ -8,21 +8,24 @@ from config import (
     ZOOM_MARKER_SIZE,
 )
 
+def get_display_mode(
+    zoom_percent: float,
+    visible_hours: float | None = None,
+    marker_setting: str = "Auto",
+) -> tuple[str, float]:
 
-def get_display_mode(zoom_percent: float) -> tuple[str, float]:
-    """
-    Keep markers visible at all times.
+    if marker_setting == "Lines only":
+        return "lines", 0.0
 
-    Important note:
-    Plotly zooming inside the chart does not automatically update Streamlit state,
-    so the marker size must remain usable even without a sidebar time-range change.
-    """
-    if zoom_percent < 20:
+    if marker_setting == "Lines + small dots":
         return "lines+markers", BASE_MARKER_SIZE
-    if zoom_percent < 60:
-        return "lines+markers", max(BASE_MARKER_SIZE, 4.0)
-    return "lines+markers", ZOOM_MARKER_SIZE
 
+    # Auto mode (fixed)
+    if visible_hours is not None:
+        if visible_hours <= 48:
+            return "lines+markers", ZOOM_MARKER_SIZE
+
+    return "lines", 0.0
 
 def get_target_points(zoom_percent: float) -> int:
     """
